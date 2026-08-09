@@ -1,0 +1,75 @@
+{
+  "key": "group_car",
+  "title": "Car Details",
+  "fields": [
+    {
+      "key": "field_a42eba3857",
+      "label": "Name",
+      "name": "name",
+      "type": "text",
+      "instructions": "",
+      "required": 0,
+      "conditional_logic": 0,
+      "wrapper": {
+        "width": "",
+        "class": "",
+        "id": ""
+      },
+      "default_value": "",
+      "placeholder": ""
+    },
+    {
+      "key": "field_4a7f56387f",
+      "label": "Logo",
+      "name": "logo",
+      "type": "image",
+      "instructions": "",
+      "required": 0,
+      "conditional_logic": 0,
+      "wrapper": {
+        "width": "",
+        "class": "",
+        "id": ""
+      },
+      "return_format": "array",
+      "preview_size": "medium",
+      "library": "all"
+    },
+    {
+      "key": "field_60213636c5",
+      "label": "Engine",
+      "name": "engine",
+      "type": "textarea",
+      "instructions": "",
+      "required": 0,
+      "conditional_logic": 0,
+      "wrapper": {
+        "width": "",
+        "class": "",
+        "id": ""
+      },
+      "default_value": "",
+      "rows": "",
+      "placeholder": "",
+      "new_lines": ""
+    }
+  ],
+  "location": [
+    [
+      {
+        "param": "post_type",
+        "operator": "==",
+        "value": "car"
+      }
+    ]
+  ],
+  "menu_order": 0,
+  "position": "normal",
+  "style": "default",
+  "label_placement": "top",
+  "instruction_placement": "label",
+  "hide_on_screen": "",
+  "active": true,
+  "description": "",
+  "show_in_rest": 0
+}

@@ -1,0 +1,35 @@
+{
+  "name": "tailomnia",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^11.0.8",
+      "onFail": "download"
+    }
+  },
+  "bin": {
+    "tailomnia": "./dist/cli.js"
+  },
+  "type": "module",
+  "dependencies": {
+    "@clack/prompts": "^1.7.0",
+    "commander": "^15.0.0",
+    "handlebars": "^4.7.9",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsx": "^4.23.11",
+    "typescript": "^7.0.2"
+  }
+}
