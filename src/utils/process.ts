@@ -38,7 +38,8 @@ export function getSpawnCommand(
 export function runCommand(
     command: string,
     args: string[] = [],
-    cwd?: string
+    cwd?: string,
+    env?: NodeJS.ProcessEnv
 ): Promise<void> {
     return new Promise((resolve, reject) => {
         const spawnCommand =
@@ -50,6 +51,9 @@ export function runCommand(
             {
                 cwd,
                 stdio: "inherit",
+                env: env
+                    ? { ...process.env, ...env }
+                    : process.env,
             }
         );
 

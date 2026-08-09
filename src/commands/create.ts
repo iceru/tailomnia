@@ -1,10 +1,14 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
+import { spawnSync } from "node:child_process";
 import * as p from "@clack/prompts";
 
 import { commandExists } from "../utils/command-exists.js";
-import { runCommand } from "../utils/process.js";
+import {
+    getSpawnCommand,
+    runCommand,
+} from "../utils/process.js";
 import { setupTailomnia } from "../setup/tailomnia.js";
 import {
     isWordPressProject,
@@ -195,11 +199,7 @@ async function promptForWordPressOptions(
         return false;
     }
 
-    if (!commandExists("wp")) {
-        p.log.error(
-            "WP-CLI is required to install WordPress."
-        );
-
+    if (!(await ensureWpCli())) {
         return null;
     }
 
@@ -235,7 +235,6 @@ async function promptForWordPressOptions(
     const dbPassword =
         await passwordPrompt({
             message: "Database password?",
-            defaultValue: "root",
         });
 
     if (dbPassword === null) {
@@ -244,7 +243,7 @@ async function promptForWordPressOptions(
 
     const dbHost = await textPrompt({
         message: "Database host?",
-        defaultValue: "localhost",
+        defaultValue: "127.0.0.1",
     });
 
     if (dbHost === null) {
@@ -319,6 +318,115 @@ async function promptForWordPressOptions(
     };
 }
 
+async function ensureWpCli(): Promise<boolean> {
+    if (commandExists("wp")) {
+        p.log.success("WP-CLI found");
+        return true;
+    }
+
+    p.log.warning("WP-CLI is not installed.");
+
+    const useHomebrew = commandExists("brew");
+    let installerName = useHomebrew
+        ? "Homebrew"
+        : "Composer";
+
+    const install = await p.confirm({
+        message: `Install WP-CLI with ${installerName}?`,
+        initialValue: true,
+    });
+
+    if (p.isCancel(install)) {
+        p.cancel("Cancelled");
+        return false;
+    }
+
+    if (!install) {
+        p.log.info(
+            "WP-CLI is required to install WordPress."
+        );
+        return false;
+    }
+
+    p.log.step("Installing WP-CLI...");
+
+    try {
+        if (useHomebrew) {
+            await runCommand("brew", [
+                "install",
+                "wp-cli",
+            ], undefined, {
+                HOMEBREW_NO_AUTO_UPDATE: "1",
+            });
+        } else {
+            await installWpCliWithComposer();
+        }
+    } catch (error) {
+        p.log.error(
+            error instanceof Error
+                ? error.message
+                : "WP-CLI installation failed."
+        );
+
+        if (!useHomebrew) {
+            return false;
+        }
+
+        p.log.warning(
+            "Homebrew could not install WP-CLI. Tailomnia will not change tap trust settings."
+        );
+
+        const tryComposer = await p.confirm({
+            message: "Try installing WP-CLI with Composer instead?",
+            initialValue: true,
+        });
+
+        if (p.isCancel(tryComposer)) {
+            p.cancel("Cancelled");
+            return false;
+        }
+
+        if (!tryComposer) {
+            return false;
+        }
+
+        installerName = "Composer";
+
+        try {
+            await installWpCliWithComposer();
+        } catch (composerError) {
+            p.log.error(
+                composerError instanceof Error
+                    ? composerError.message
+                    : "WP-CLI installation failed."
+            );
+            return false;
+        }
+    }
+
+    if (!commandExists("wp")) {
+        p.log.error(
+            "WP-CLI was installed, but the command is not available in PATH."
+        );
+        p.log.info(
+            `Add the ${installerName} binary directory to PATH and try again.`
+        );
+        return false;
+    }
+
+    p.log.success("WP-CLI installed");
+    return true;
+}
+
+async function installWpCliWithComposer(): Promise<void> {
+    await runCommand("composer", [
+        "global",
+        "require",
+        "wp-cli/wp-cli-bundle",
+        "--with-all-dependencies",
+    ]);
+}
+
 async function installWordPress({
     projectPath,
     options,
@@ -334,14 +442,12 @@ async function installWordPress({
         recursive: true,
     });
 
-    await runCommand(
-        "wp",
+    await runWpCommand(
         ["core", "download"],
         projectPath
     );
 
-    await runCommand(
-        "wp",
+    await runWpCommand(
         [
             "config",
             "create",
@@ -353,20 +459,12 @@ async function installWordPress({
         projectPath
     );
 
-    try {
-        await runCommand(
-            "wp",
-            ["db", "create"],
-            projectPath
-        );
-    } catch {
-        p.log.info(
-            "Database could not be created automatically. Continuing in case it already exists."
-        );
-    }
+    await prepareDatabase(
+        projectPath,
+        options.dbHost
+    );
 
-    await runCommand(
-        "wp",
+    await runWpCommand(
         [
             "core",
             "install",
@@ -382,6 +480,183 @@ async function installWordPress({
     p.log.success(
         "WordPress installed"
     );
+}
+
+async function prepareDatabase(
+    projectPath: string,
+    dbHost: string
+): Promise<void> {
+    try {
+        await runWpCommand(
+            ["db", "create"],
+            projectPath
+        );
+        return;
+    } catch {
+        try {
+            await runWpCommand(
+                ["db", "check"],
+                projectPath
+            );
+            p.log.info("Using existing database");
+            return;
+        } catch {
+            // Offer local service recovery below.
+        }
+    }
+
+    const databaseStarted =
+        await offerToStartLocalDatabase(dbHost);
+
+    if (!databaseStarted) {
+        throw new Error(
+            "A running MySQL-compatible database is required to install WordPress."
+        );
+    }
+
+    await new Promise((resolve) =>
+        setTimeout(resolve, 1000)
+    );
+
+    try {
+        await runWpCommand(
+            ["db", "create"],
+            projectPath
+        );
+    } catch {
+        await runWpCommand(
+            ["db", "check"],
+            projectPath
+        );
+        p.log.info("Using existing database");
+    }
+}
+
+async function offerToStartLocalDatabase(
+    dbHost: string
+): Promise<boolean> {
+    const normalizedHost =
+        dbHost.trim().toLowerCase();
+    const host = normalizedHost.startsWith("[")
+        ? normalizedHost.slice(
+              1,
+              normalizedHost.indexOf("]")
+          )
+        : normalizedHost === "::1"
+          ? normalizedHost
+          : normalizedHost.split(":")[0];
+    const isLocal = [
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    ].includes(host ?? "");
+
+    if (!isLocal) {
+        p.log.error(
+            `Could not connect to the database at ${dbHost}. Start that database server and try again.`
+        );
+        return false;
+    }
+
+    if (!commandExists("brew")) {
+        p.log.error(
+            "No local database server is reachable. Start MySQL or MariaDB and try again."
+        );
+        return false;
+    }
+
+    let formula = ["mysql", "mariadb"].find(
+        isHomebrewFormulaInstalled
+    );
+
+    if (!formula) {
+        const install = await p.confirm({
+            message: "Install and start MySQL with Homebrew?",
+            initialValue: true,
+        });
+
+        if (p.isCancel(install)) {
+            p.cancel("Cancelled");
+            return false;
+        }
+
+        if (!install) {
+            return false;
+        }
+
+        formula = "mysql";
+        p.log.step("Installing MySQL...");
+        await runCommand(
+            "brew",
+            ["install", formula],
+            undefined,
+            { HOMEBREW_NO_AUTO_UPDATE: "1" }
+        );
+    } else {
+        const start = await p.confirm({
+            message: `Start ${formula} with Homebrew?`,
+            initialValue: true,
+        });
+
+        if (p.isCancel(start)) {
+            p.cancel("Cancelled");
+            return false;
+        }
+
+        if (!start) {
+            return false;
+        }
+    }
+
+    p.log.step(`Starting ${formula}...`);
+    await runCommand(
+        "brew",
+        ["services", "start", formula],
+        undefined,
+        { HOMEBREW_NO_AUTO_UPDATE: "1" }
+    );
+    p.log.success(`${formula} started`);
+    return true;
+}
+
+function isHomebrewFormulaInstalled(
+    formula: string
+): boolean {
+    const spawnCommand = getSpawnCommand(
+        "brew",
+        ["list", "--versions", formula]
+    );
+    const result = spawnSync(
+        spawnCommand.command,
+        spawnCommand.args,
+        {
+            stdio: "ignore",
+            env: {
+                ...process.env,
+                HOMEBREW_NO_AUTO_UPDATE: "1",
+            },
+        }
+    );
+
+    return result.status === 0;
+}
+
+async function runWpCommand(
+    args: string[],
+    cwd: string
+): Promise<void> {
+    const existingPhpArgs =
+        process.env.WP_CLI_PHP_ARGS?.trim();
+    const phpArgs = [
+        existingPhpArgs,
+        "-d memory_limit=512M",
+    ]
+        .filter(Boolean)
+        .join(" ");
+
+    await runCommand("wp", args, cwd, {
+        WP_CLI_PHP_ARGS: phpArgs,
+    });
 }
 
 async function setupWordPressIfAvailable({
@@ -478,7 +753,7 @@ async function textPrompt({
 }): Promise<string | null> {
     const result = await p.text({
         message,
-        placeholder: defaultValue,
+        initialValue: defaultValue,
         validate(value) {
             const finalValue =
                 value?.trim() || defaultValue;
