@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+
+import { getSpawnCommand } from "./process.js";
 
 export async function isWordPressProject(
     projectPath: string
@@ -24,22 +27,23 @@ export async function isWordPressProject(
     }
 }
 
-import { spawnSync } from "node:child_process";
-
 export function isWordPressInstalled(
     projectPath: string
 ): boolean {
-    const result = spawnSync(
+    const spawnCommand = getSpawnCommand(
         "wp",
         [
             "core",
             "is-installed",
-        ],
+        ]
+    );
+
+    const result = spawnSync(
+        spawnCommand.command,
+        spawnCommand.args,
         {
             cwd: projectPath,
             stdio: "ignore",
-            shell:
-                process.platform === "win32",
         }
     );
 

@@ -1,8 +1,9 @@
 import * as p from "@clack/prompts";
+import { spawnSync } from "node:child_process";
 
 import { commandExists } from "../utils/command-exists.js";
 import { runCommand } from "../utils/process.js";
-import { spawnSync } from "node:child_process";
+import { getSpawnCommand } from "../utils/process.js";
 
 interface SetupWordPressOptions {
     projectPath: string;
@@ -106,18 +107,21 @@ function isPluginInstalled(
     projectPath: string,
     plugin: string
 ): boolean {
-    const result = spawnSync(
+    const spawnCommand = getSpawnCommand(
         "wp",
         [
             "plugin",
             "is-installed",
             plugin,
-        ],
+        ]
+    );
+
+    const result = spawnSync(
+        spawnCommand.command,
+        spawnCommand.args,
         {
             cwd: projectPath,
             stdio: "ignore",
-            shell:
-                process.platform === "win32",
         }
     );
 

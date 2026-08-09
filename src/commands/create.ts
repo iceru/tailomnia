@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import * as p from "@clack/prompts";
 
 import { commandExists } from "../utils/command-exists.js";
@@ -10,6 +11,18 @@ import {
     isWordPressInstalled,
 } from "../utils/wordpress.js";
 import { setupWordPress } from "../setup/wordpress.js";
+
+interface WordPressInstallOptions {
+    dbName: string;
+    dbUser: string;
+    dbPassword: string;
+    dbHost: string;
+    siteUrl: string;
+    siteTitle: string;
+    adminUser: string;
+    adminPassword: string;
+    adminEmail: string;
+}
 
 export async function createProject(
     name?: string
@@ -66,7 +79,35 @@ export async function createProject(
         return;
     }
 
+    const wordpressOptions =
+        await promptForWordPressOptions(
+            projectName
+        );
+
+    if (wordpressOptions === null) {
+        return;
+    }
+
     try {
+        const tailPressTarget =
+            wordpressOptions
+                ? path
+                      .join(
+                          projectName,
+                          "wp-content",
+                          "themes",
+                          projectName
+                      )
+                      .replace(/\\/g, "/")
+                : projectName;
+
+        if (wordpressOptions) {
+            await installWordPress({
+                projectPath,
+                options: wordpressOptions,
+            });
+        }
+
         p.log.step(
             "Starting TailPress installer..."
         );
@@ -75,7 +116,8 @@ export async function createProject(
             "tailpress",
             [
                 "new",
-                projectName,
+                tailPressTarget,
+                "--no-interaction",
             ],
             process.cwd()
         );
@@ -134,6 +176,214 @@ export async function createProject(
     }
 }
 
+async function promptForWordPressOptions(
+    projectName: string
+): Promise<WordPressInstallOptions | null | false> {
+    const shouldInstall =
+        await p.confirm({
+            message:
+                "Install WordPress as well?",
+            initialValue: false,
+        });
+
+    if (p.isCancel(shouldInstall)) {
+        p.cancel("Cancelled");
+        return null;
+    }
+
+    if (!shouldInstall) {
+        return false;
+    }
+
+    if (!commandExists("wp")) {
+        p.log.error(
+            "WP-CLI is required to install WordPress."
+        );
+
+        return null;
+    }
+
+    const defaultDbName =
+        projectName.replace(/-/g, "_");
+    const defaultSiteUrl = `http://${projectName}.local`;
+    const defaultSiteTitle =
+        titleCase(projectName);
+
+    const dbName = await textPrompt({
+        message: "Database name?",
+        defaultValue: defaultDbName,
+        validate(value) {
+            if (!/^[a-zA-Z0-9_]+$/.test(value)) {
+                return "Use letters, numbers, and underscores.";
+            }
+        },
+    });
+
+    if (dbName === null) {
+        return null;
+    }
+
+    const dbUser = await textPrompt({
+        message: "Database user?",
+        defaultValue: "root",
+    });
+
+    if (dbUser === null) {
+        return null;
+    }
+
+    const dbPassword =
+        await passwordPrompt({
+            message: "Database password?",
+            defaultValue: "root",
+        });
+
+    if (dbPassword === null) {
+        return null;
+    }
+
+    const dbHost = await textPrompt({
+        message: "Database host?",
+        defaultValue: "localhost",
+    });
+
+    if (dbHost === null) {
+        return null;
+    }
+
+    const siteUrl = await textPrompt({
+        message: "Site URL?",
+        defaultValue: defaultSiteUrl,
+    });
+
+    if (siteUrl === null) {
+        return null;
+    }
+
+    const siteTitle = await textPrompt({
+        message: "Site title?",
+        defaultValue: defaultSiteTitle,
+    });
+
+    if (siteTitle === null) {
+        return null;
+    }
+
+    const adminUser = await textPrompt({
+        message: "Admin username?",
+        defaultValue: "admin",
+    });
+
+    if (adminUser === null) {
+        return null;
+    }
+
+    const adminPassword =
+        await passwordPrompt({
+            message: "Admin password?",
+            validate(value) {
+                if (!value) {
+                    return "Admin password is required.";
+                }
+            },
+        });
+
+    if (adminPassword === null) {
+        return null;
+    }
+
+    const adminEmail = await textPrompt({
+        message: "Admin email?",
+        defaultValue: "admin@example.com",
+        validate(value) {
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+                return "Enter a valid email address.";
+            }
+        },
+    });
+
+    if (adminEmail === null) {
+        return null;
+    }
+
+    return {
+        dbName,
+        dbUser,
+        dbPassword,
+        dbHost,
+        siteUrl,
+        siteTitle,
+        adminUser,
+        adminPassword,
+        adminEmail,
+    };
+}
+
+async function installWordPress({
+    projectPath,
+    options,
+}: {
+    projectPath: string;
+    options: WordPressInstallOptions;
+}) {
+    p.log.step(
+        "Installing WordPress..."
+    );
+
+    await fs.mkdir(projectPath, {
+        recursive: true,
+    });
+
+    await runCommand(
+        "wp",
+        ["core", "download"],
+        projectPath
+    );
+
+    await runCommand(
+        "wp",
+        [
+            "config",
+            "create",
+            `--dbname=${options.dbName}`,
+            `--dbuser=${options.dbUser}`,
+            `--dbpass=${options.dbPassword}`,
+            `--dbhost=${options.dbHost}`,
+        ],
+        projectPath
+    );
+
+    try {
+        await runCommand(
+            "wp",
+            ["db", "create"],
+            projectPath
+        );
+    } catch {
+        p.log.info(
+            "Database could not be created automatically. Continuing in case it already exists."
+        );
+    }
+
+    await runCommand(
+        "wp",
+        [
+            "core",
+            "install",
+            `--url=${options.siteUrl}`,
+            `--title=${options.siteTitle}`,
+            `--admin_user=${options.adminUser}`,
+            `--admin_password=${options.adminPassword}`,
+            `--admin_email=${options.adminEmail}`,
+        ],
+        projectPath
+    );
+
+    p.log.success(
+        "WordPress installed"
+    );
+}
+
 async function setupWordPressIfAvailable({
     projectPath,
     themePath,
@@ -147,6 +397,19 @@ async function setupWordPressIfAvailable({
         );
 
     if (!hasWordPress) {
+        if (
+            isThemeInsideWordPressTree(
+                projectPath,
+                themePath
+            )
+        ) {
+            p.log.warning(
+                "The theme was created inside wp-content/themes, but WordPress files were not installed. TailPress may have failed during its WordPress step."
+            );
+
+            return;
+        }
+
         p.log.info(
             "WordPress installation not detected. Skipping WordPress setup."
         );
@@ -202,6 +465,96 @@ async function setupWordPressIfAvailable({
         installAcf:
             Boolean(shouldInstallAcf),
     });
+}
+
+async function textPrompt({
+    message,
+    defaultValue,
+    validate,
+}: {
+    message: string;
+    defaultValue: string;
+    validate?: (value: string) => string | undefined;
+}): Promise<string | null> {
+    const result = await p.text({
+        message,
+        placeholder: defaultValue,
+        validate(value) {
+            const finalValue =
+                value?.trim() || defaultValue;
+
+            return validate
+                ? validate(finalValue)
+                : undefined;
+        },
+    });
+
+    if (p.isCancel(result)) {
+        p.cancel("Cancelled");
+        return null;
+    }
+
+    return String(result).trim() || defaultValue;
+}
+
+async function passwordPrompt({
+    message,
+    defaultValue,
+    validate,
+}: {
+    message: string;
+    defaultValue?: string;
+    validate?: (value: string) => string | undefined;
+}): Promise<string | null> {
+    const result = await p.password({
+        message,
+        validate(value) {
+            const finalValue =
+                value || defaultValue || "";
+
+            return validate
+                ? validate(finalValue)
+                : undefined;
+        },
+    });
+
+    if (p.isCancel(result)) {
+        p.cancel("Cancelled");
+        return null;
+    }
+
+    return String(result) || defaultValue || "";
+}
+
+function titleCase(value: string): string {
+    return value
+        .split(/[-_]/g)
+        .filter(Boolean)
+        .map(
+            (part) =>
+                part.charAt(0).toUpperCase() +
+                part.slice(1)
+        )
+        .join(" ");
+}
+
+function isThemeInsideWordPressTree(
+    projectPath: string,
+    themePath: string
+): boolean {
+    const relativeThemePath = path.relative(
+        projectPath,
+        themePath
+    );
+
+    const parts = relativeThemePath.split(
+        path.sep
+    );
+
+    return (
+        parts[0] === "wp-content" &&
+        parts[1] === "themes"
+    );
 }
 
 async function checkRequirements(): Promise<boolean> {
@@ -435,7 +788,7 @@ async function findTailPressThemeRecursively(
         return directory;
     }
 
-    let entries: fs.Dirent[];
+    let entries: Dirent[];
 
     try {
         entries = await fs.readdir(
